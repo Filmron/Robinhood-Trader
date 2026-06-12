@@ -1,13 +1,15 @@
 """Main trading bot loop."""
 
+from __future__ import annotations
+
+import logging
 import os
 import time
-import logging
 
 from dotenv import load_dotenv
 
 from .robinhood import RobinhoodClient
-from .strategy import Signal, compute_signal
+from .strategy import Signal, registry
 
 load_dotenv()
 
@@ -15,40 +17,80 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 
+def _parse_assets(raw: str) -> list[dict]:
+    """
+    Parse ASSETS env var. Format:
+      SYMBOL:TYPE  e.g.  AAPL:stock,BTC-USD:crypto,SPY240620C00540000:option
+    Defaults to stock if type is omitted.
+    """
+    assets = []
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        parts = token.split(":")
+        assets.append({"symbol": parts[0], "asset_type": parts[1] if len(parts) > 1 else "stock"})
+    return assets
+
+
+def _parse_strategy_params(raw: str) -> dict:
+    """Parse KEY=VALUE,KEY=VALUE into a dict."""
+    params = {}
+    for item in raw.split(","):
+        item = item.strip()
+        if "=" in item:
+            k, v = item.split("=", 1)
+            params[k.strip()] = v.strip()
+    return params
+
+
 def run():
-    symbols = [s.strip() for s in os.getenv("SYMBOLS", "AAPL").split(",")]
-    short_window = int(os.getenv("SHORT_WINDOW", "10"))
-    long_window = int(os.getenv("LONG_WINDOW", "30"))
+    assets = _parse_assets(os.getenv("ASSETS", "AAPL:stock"))
+    strategy_name = os.getenv("STRATEGY", "sma-crossover")
+    strategy_params = _parse_strategy_params(os.getenv("STRATEGY_PARAMS", ""))
     dry_run = os.getenv("DRY_RUN", "true").lower() != "false"
     poll_interval = int(os.getenv("POLL_INTERVAL_SECONDS", "60"))
+    data_span = os.getenv("DATA_SPAN", "week")
 
+    strategy = registry.build(strategy_name, strategy_params)
     client = RobinhoodClient()
 
-    log.info("Bot started | symbols=%s short=%d long=%d dry_run=%s", symbols, short_window, long_window, dry_run)
+    log.info(
+        "Bot started | strategy=%s params=%s assets=%s dry_run=%s",
+        strategy_name, strategy_params,
+        [a["symbol"] for a in assets], dry_run,
+    )
+    log.info("Available strategies: %s", registry.list())
 
     while True:
-        for symbol in symbols:
+        for asset in assets:
+            symbol, asset_type = asset["symbol"], asset["asset_type"]
             try:
-                prices = client.get_price_history(symbol)
-                current_price = prices[-1] if prices else client.get_quote(symbol)
+                data = client.get_market_data(symbol, asset_type, span=data_span)
 
-                trade = compute_signal(symbol, prices, short_window, long_window)
-                if trade is None:
-                    log.info("%s: not enough data yet (%d prices, need %d)", symbol, len(prices), long_window)
+                if len(data.prices) < strategy.min_bars():
+                    log.info("%s: need %d bars, have %d", symbol, strategy.min_bars(), len(data.prices))
                     continue
 
-                log.info(
-                    "%s price=%.2f short_ma=%.2f long_ma=%.2f signal=%s",
-                    symbol, trade.price, trade.short_ma, trade.long_ma, trade.signal.value,
-                )
+                trade = strategy.generate_signal(data)
+                if trade is None:
+                    log.info("%s: no signal", symbol)
+                    continue
 
-                if trade.signal == Signal.BUY:
-                    client.place_order(symbol, "buy", quantity=1, dry_run=dry_run)
-                elif trade.signal == Signal.SELL:
-                    client.place_order(symbol, "sell", quantity=1, dry_run=dry_run)
+                log.info("%s [%s] price=%.4f signal=%s — %s",
+                         symbol, asset_type, trade.price, trade.signal.value, trade.reason)
+
+                if trade.signal in (Signal.BUY, Signal.SELL):
+                    client.place_order(
+                        symbol=symbol,
+                        asset_type=asset_type,
+                        side=trade.signal.value,
+                        quantity=trade.quantity,
+                        dry_run=dry_run,
+                    )
 
             except Exception as exc:
-                log.error("%s: error during evaluation: %s", symbol, exc)
+                log.error("%s: %s", symbol, exc)
 
-        log.info("Sleeping %ds until next poll …", poll_interval)
+        log.info("Sleeping %ds …", poll_interval)
         time.sleep(poll_interval)
