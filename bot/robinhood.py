@@ -15,7 +15,12 @@ class RobinhoodClient:
     def __init__(self, mcp_url: str | None = None):
         self.mcp_url = mcp_url or os.environ["ROBINHOOD_MCP_URL"]
         self._client = anthropic.Anthropic()
-        self._mcp_server = {"type": "url", "url": self.mcp_url}
+        token = os.environ.get("ROBINHOOD_API_TOKEN", "")
+        self._mcp_server = {
+            "type": "url",
+            "url": self.mcp_url,
+            **({"headers": {"Authorization": f"Bearer {token}"}} if token else {}),
+        }
 
     def _call(self, prompt: str) -> str:
         response = self._client.beta.messages.create(
