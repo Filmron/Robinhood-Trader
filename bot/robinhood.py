@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 import anthropic
+import yfinance as yf
 
 from .strategy import MarketData
 
@@ -21,6 +22,7 @@ class RobinhoodClient:
         if token:
             sep = "&" if "?" in url else "?"
             url = f"{url}{sep}token={token}"
+        self._account_number = None
         self._mcp_server = {
             "type": "url",
             "name": "robinhood",
@@ -40,8 +42,14 @@ class RobinhoodClient:
             "",
         )
 
+    def _get_account_number(self) -> str:
+        if self._account_number:
+            return self._account_number
+        raw = self._call("Call get_accounts and return ONLY the account number as plain text.")
+        self._account_number = raw.strip().split()[0]
+        return self._account_number
+
     def _parse_json(self, raw: str, context: str) -> Any:
-        # Extract JSON from markdown code blocks if present
         match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
         text = match.group(1) if match else raw.strip()
         try:
@@ -50,21 +58,23 @@ class RobinhoodClient:
             raise ValueError(f"Could not parse JSON for {context}: {raw!r}") from exc
 
     # ------------------------------------------------------------------
-    # Market data
+    # Market data — free via Yahoo Finance, no API credits used
     # ------------------------------------------------------------------
 
     def get_market_data(self, symbol: str, asset_type: str, span: str = "week") -> MarketData:
-        """Fetch OHLCV history and return a MarketData object."""
-        raw = self._call(
-            f"Get historical OHLCV data for {symbol} ({asset_type}) over the past {span}. "
-            "Return JSON: {\"prices\": [...], \"volume\": [...]} where prices are closing prices."
-        )
-        data = self._parse_json(raw, f"market data for {symbol}")
+        """Fetch OHLCV history from Yahoo Finance (free, no AI credits)."""
+        yf_symbol = symbol  # XRP-USD, AAPL, SPY, BBAI all work natively in yfinance
+        ticker = yf.Ticker(yf_symbol)
+        hist = ticker.history(period="1mo", interval="1d")
+        if hist.empty:
+            raise ValueError(f"No data returned from Yahoo Finance for {symbol}")
+        prices = [float(p) for p in hist["Close"].tolist()]
+        volume = [float(v) for v in hist["Volume"].tolist()]
         return MarketData(
             symbol=symbol,
             asset_type=asset_type,
-            prices=[float(p) for p in data.get("prices", [])],
-            volume=[float(v) for v in data.get("volume", [])],
+            prices=prices,
+            volume=volume,
         )
 
     def get_option_data(self, symbol: str, expiry: str, strike: float, option_type: str) -> MarketData:
@@ -84,7 +94,7 @@ class RobinhoodClient:
         )
 
     # ------------------------------------------------------------------
-    # Order management
+    # Order management — only uses AI credits when actually placing a trade
     # ------------------------------------------------------------------
 
     def place_order(
@@ -97,7 +107,7 @@ class RobinhoodClient:
         order_type: str = "market",
         limit_price: float | None = None,
     ) -> dict[str, Any]:
-        tag = f"[DRY RUN] " if dry_run else ""
+        tag = "[DRY RUN] " if dry_run else ""
         print(f"{tag}{side.upper()} {quantity}x {symbol} ({asset_type}) @ {order_type}"
               + (f" limit={limit_price}" if limit_price else ""))
 
@@ -105,10 +115,14 @@ class RobinhoodClient:
             return {"status": "dry_run", "symbol": symbol, "side": side,
                     "quantity": quantity, "asset_type": asset_type}
 
-        price_clause = f" at a limit price of {limit_price}" if limit_price else ""
+        price_clause = f", limit_price={limit_price}" if limit_price else ""
+        acct = self._get_account_number()
         raw = self._call(
-            f"Place a {order_type} {side} order for {quantity} of {symbol} ({asset_type}){price_clause}. "
-            "Return the order confirmation as JSON."
+            f"Account: {acct}. Use place_order to submit a {order_type} {side} order: "
+            f"symbol={symbol}, quantity={quantity}{price_clause}. "
+            f"The account is agentic_allowed. Return ONLY JSON: "
+            f'{{\"order_id\": \"...\", \"status\": \"...\", \"symbol\": \"{symbol}\", '
+            f'\"side\": \"{side}\", \"quantity\": {quantity}}}.'
         )
         return self._parse_json(raw, f"order confirmation for {symbol}")
 
