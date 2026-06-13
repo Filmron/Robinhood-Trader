@@ -68,14 +68,15 @@ def run():
     dry_run = os.getenv("DRY_RUN", "true").lower() != "false"
     poll_interval = int(os.getenv("POLL_INTERVAL_SECONDS", "60"))
     data_span = os.getenv("DATA_SPAN", "week")
+    trade_amount_usd = float(os.getenv("TRADE_AMOUNT_USD", "50"))
 
     strategy = registry.build(strategy_name, strategy_params)
     client = RobinhoodClient()
 
     log.info(
-        "Bot started | strategy=%s params=%s assets=%s dry_run=%s",
+        "Bot started | strategy=%s params=%s assets=%s dry_run=%s trade_amount=$%.2f",
         strategy_name, strategy_params,
-        [a["symbol"] for a in assets], dry_run,
+        [a["symbol"] for a in assets], dry_run, trade_amount_usd,
     )
     log.info("Available strategies: %s", registry.list())
 
@@ -94,19 +95,21 @@ def run():
                     log.info("%s: no signal", symbol)
                     continue
 
-                log.info("%s [%s] price=%.4f signal=%s — %s",
-                         symbol, asset_type, trade.price, trade.signal.value, trade.reason)
+                quantity = round(trade_amount_usd / trade.price, 6) if trade.price > 0 else trade.quantity
+                log.info("%s [%s] price=%.4f signal=%s qty=%.4f ($%.2f) — %s",
+                         symbol, asset_type, trade.price, trade.signal.value,
+                         quantity, quantity * trade.price, trade.reason)
 
                 if trade.signal in (Signal.BUY, Signal.SELL):
                     client.place_order(
                         symbol=symbol,
                         asset_type=asset_type,
                         side=trade.signal.value,
-                        quantity=trade.quantity,
+                        quantity=quantity,
                         dry_run=dry_run,
                     )
                     _log_trade(symbol, asset_type, trade.signal.value,
-                               trade.quantity, trade.price, trade.reason, dry_run)
+                               quantity, trade.price, trade.reason, dry_run)
 
             except Exception as exc:
                 log.error("%s: %s", symbol, exc)
