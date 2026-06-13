@@ -100,6 +100,10 @@ def run():
                          symbol, asset_type, trade.price, trade.signal.value,
                          quantity, quantity * trade.price, trade.reason)
 
+                if trade.signal == Signal.SELL and symbol not in positions:
+                    log.info("%s: skipping sell — no position held", symbol)
+                    continue
+
                 if trade.signal in (Signal.BUY, Signal.SELL):
                     client.place_order(
                         symbol=symbol,
@@ -110,6 +114,10 @@ def run():
                     )
                     _log_trade(symbol, asset_type, trade.signal.value,
                                quantity, trade.price, trade.reason, dry_run)
+                    if trade.signal == Signal.BUY:
+                        positions[symbol] = quantity
+                    elif symbol in positions:
+                        del positions[symbol]
 
             except Exception as exc:
                 log.error("%s: %s", symbol, exc)
