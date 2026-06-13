@@ -18,6 +18,7 @@ class RobinhoodClient:
         token = os.environ.get("ROBINHOOD_API_TOKEN", "")
         self._mcp_server = {
             "type": "url",
+            "name": "robinhood",
             "url": self.mcp_url,
             **({"headers": {"Authorization": f"Bearer {token}"}} if token else {}),
         }
