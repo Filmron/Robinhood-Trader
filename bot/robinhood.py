@@ -16,11 +16,14 @@ class RobinhoodClient:
         self.mcp_url = mcp_url or os.environ["ROBINHOOD_MCP_URL"]
         self._client = anthropic.Anthropic()
         token = os.environ.get("ROBINHOOD_API_TOKEN", "")
+        url = self.mcp_url
+        if token:
+            sep = "&" if "?" in url else "?"
+            url = f"{url}{sep}token={token}"
         self._mcp_server = {
             "type": "url",
             "name": "robinhood",
-            "url": self.mcp_url,
-            **({"authorization": {"type": "bearer", "value": token}} if token else {}),
+            "url": url,
         }
 
     def _call(self, prompt: str) -> str:
