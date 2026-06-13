@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import csv
 import logging
 import os
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -15,6 +18,20 @@ load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
+
+TRADE_LOG = Path("trades.csv")
+
+def _log_trade(symbol: str, asset_type: str, side: str, quantity: float,
+               price: float, reason: str, dry_run: bool) -> None:
+    write_header = not TRADE_LOG.exists()
+    with TRADE_LOG.open("a", newline="") as f:
+        w = csv.writer(f)
+        if write_header:
+            w.writerow(["timestamp", "symbol", "asset_type", "side", "quantity", "price", "reason", "dry_run"])
+        w.writerow([
+            datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+            symbol, asset_type, side, quantity, price, reason, dry_run,
+        ])
 
 
 def _parse_assets(raw: str) -> list[dict]:
@@ -88,6 +105,8 @@ def run():
                         quantity=trade.quantity,
                         dry_run=dry_run,
                     )
+                    _log_trade(symbol, asset_type, trade.signal.value,
+                               trade.quantity, trade.price, trade.reason, dry_run)
 
             except Exception as exc:
                 log.error("%s: %s", symbol, exc)
