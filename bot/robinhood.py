@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 import anthropic
@@ -40,8 +41,11 @@ class RobinhoodClient:
         )
 
     def _parse_json(self, raw: str, context: str) -> Any:
+        # Extract JSON from markdown code blocks if present
+        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
+        text = match.group(1) if match else raw.strip()
         try:
-            return json.loads(raw.strip())
+            return json.loads(text)
         except json.JSONDecodeError as exc:
             raise ValueError(f"Could not parse JSON for {context}: {raw!r}") from exc
 
