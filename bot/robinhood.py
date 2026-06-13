@@ -20,7 +20,7 @@ class RobinhoodClient:
             "type": "url",
             "name": "robinhood",
             "url": self.mcp_url,
-            **({"headers": {"Authorization": f"Bearer {token}"}} if token else {}),
+            **({"authorization": {"type": "bearer", "value": token}} if token else {}),
         }
 
     def _call(self, prompt: str) -> str:
