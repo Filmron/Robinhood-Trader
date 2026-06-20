@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import urllib.parse
+import urllib.request
+from pathlib import Path
 from typing import Any
 
 import anthropic
@@ -12,13 +15,65 @@ import yfinance as yf
 
 from .strategy import MarketData
 
+TOKEN_URL = "https://api.robinhood.com/oauth2/token/"
+_ENV_PATH = Path(__file__).parent.parent / ".env"
+
+
+def _refresh_access_token() -> str | None:
+    """Use the refresh token to silently get a new access token and update .env."""
+    refresh_token = os.environ.get("ROBINHOOD_REFRESH_TOKEN", "")
+    if not refresh_token:
+        return None
+    try:
+        params = urllib.parse.urlencode({
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": "robinhood-mcp-public",
+        }).encode()
+        req = urllib.request.Request(
+            TOKEN_URL,
+            data=params,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        new_token = data.get("access_token")
+        new_refresh = data.get("refresh_token")
+        if not new_token:
+            return None
+        os.environ["ROBINHOOD_API_TOKEN"] = new_token
+        if new_refresh:
+            os.environ["ROBINHOOD_REFRESH_TOKEN"] = new_refresh
+        if _ENV_PATH.exists():
+            lines = _ENV_PATH.read_text().splitlines(keepends=True)
+            to_update = {"ROBINHOOD_API_TOKEN": new_token}
+            if new_refresh:
+                to_update["ROBINHOOD_REFRESH_TOKEN"] = new_refresh
+            new_lines = []
+            for line in lines:
+                key = line.split("=", 1)[0].strip()
+                if key in to_update:
+                    new_lines.append(f"{key}={to_update.pop(key)}\n")
+                else:
+                    new_lines.append(line)
+            for k, v in to_update.items():
+                new_lines.append(f"{k}={v}\n")
+            _ENV_PATH.write_text("".join(new_lines))
+        return new_token
+    except Exception:
+        return None
+
 
 class RobinhoodClient:
     def __init__(self, mcp_url: str | None = None):
         self.mcp_url = mcp_url or os.environ["ROBINHOOD_MCP_URL"]
         self._client = anthropic.Anthropic()
-        token = os.environ.get("ROBINHOOD_API_TOKEN", "")
         self._account_number = None
+        self._update_mcp_server()
+
+    def _update_mcp_server(self) -> None:
+        token = os.environ.get("ROBINHOOD_API_TOKEN", "")
         self._mcp_server = {
             "type": "url",
             "name": "robinhood",
@@ -27,13 +82,30 @@ class RobinhoodClient:
         }
 
     def _call(self, prompt: str) -> str:
-        response = self._client.beta.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
-            mcp_servers=[self._mcp_server],
-            messages=[{"role": "user", "content": prompt}],
-            betas=["mcp-client-2025-04-04"],
-        )
+        try:
+            response = self._client.beta.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=4096,
+                mcp_servers=[self._mcp_server],
+                messages=[{"role": "user", "content": prompt}],
+                betas=["mcp-client-2025-04-04"],
+            )
+        except anthropic.BadRequestError as e:
+            if "Authentication error" in str(e):
+                new_token = _refresh_access_token()
+                if new_token:
+                    self._update_mcp_server()
+                    response = self._client.beta.messages.create(
+                        model="claude-sonnet-4-6",
+                        max_tokens=4096,
+                        mcp_servers=[self._mcp_server],
+                        messages=[{"role": "user", "content": prompt}],
+                        betas=["mcp-client-2025-04-04"],
+                    )
+                else:
+                    raise
+            else:
+                raise
         return next(
             (block.text for block in response.content if hasattr(block, "text")),
             "",
@@ -59,23 +131,18 @@ class RobinhoodClient:
     # ------------------------------------------------------------------
 
     def get_market_data(self, symbol: str, asset_type: str, span: str = "week") -> MarketData:
-        """Fetch OHLCV history from Yahoo Finance (free, no AI credits)."""
-        yf_symbol = symbol  # XRP-USD, AAPL, SPY, BBAI all work natively in yfinance
-        ticker = yf.Ticker(yf_symbol)
+        ticker = yf.Ticker(symbol)
         hist = ticker.history(period="1mo", interval="1d")
         if hist.empty:
-            raise ValueError(f"No data returned from Yahoo Finance for {symbol}")
-        prices = [float(p) for p in hist["Close"].tolist()]
-        volume = [float(v) for v in hist["Volume"].tolist()]
+            raise ValueError(f"No data from Yahoo Finance for {symbol}")
         return MarketData(
             symbol=symbol,
             asset_type=asset_type,
-            prices=prices,
-            volume=volume,
+            prices=[float(p) for p in hist["Close"].tolist()],
+            volume=[float(v) for v in hist["Volume"].tolist()],
         )
 
     def get_option_data(self, symbol: str, expiry: str, strike: float, option_type: str) -> MarketData:
-        """Fetch option chain data including greeks."""
         raw = self._call(
             f"Get market data for {symbol} {option_type} option, strike {strike}, expiry {expiry}. "
             "Return JSON: {\"prices\": [...], \"volume\": [...], \"delta\": 0.0, \"gamma\": 0.0, "
@@ -91,7 +158,7 @@ class RobinhoodClient:
         )
 
     # ------------------------------------------------------------------
-    # Order management — only uses AI credits when actually placing a trade
+    # Order management — only uses API credits when placing a trade
     # ------------------------------------------------------------------
 
     def place_order(
@@ -114,12 +181,10 @@ class RobinhoodClient:
 
         price_clause = f", limit_price={limit_price}" if limit_price else ""
         acct = self._get_account_number()
-        # Step 1: run the required review
         self._call(
             f"Account: {acct}. Call review_equity_order for a {order_type} {side} order: "
             f"symbol={symbol}, quantity={quantity}{price_clause}."
         )
-        # Step 2: place the order
         raw = self._call(
             f"Account: {acct}. The review is complete and approved. "
             f"Now call place_equity_order: symbol={symbol}, side={side}, "
