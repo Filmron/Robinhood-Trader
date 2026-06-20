@@ -26,7 +26,7 @@ TRADE_LOG = Path("trades.csv")
 
 CRYPTO_WATCHLIST = [
     "BTC-USD", "ETH-USD", "XRP-USD", "SOL-USD", "DOGE-USD",
-    "ADA-USD", "AVAX-USD", "LINK-USD", "DOT-USD", "POL-USD",
+    "ADA-USD", "AVAX-USD", "LINK-USD", "DOT-USD", "SHIB-USD",
 ]
 
 # Stocks that do not support fractional share trading on Robinhood
@@ -80,11 +80,11 @@ def _suggest_crypto(balance: float) -> None:
     results.sort(key=lambda x: x[2], reverse=True)
     top = results[:3]
     best = top[0]
-    lines = [f"Crypto update (balance: ${balance:.2f}):\n"]
+    lines = [f"Crypto update (balance: ${balance:.2f}):"]
     for symbol, price, mom in top:
         arrow = "+" if mom >= 0 else ""
         lines.append(f"  {symbol}: ${price:.4f} ({arrow}{mom:.1f}% / 5d)")
-    lines.append(f"\nTop pick: BUY {best[0]} — ${best[1]:.4f}, could get {balance/best[1]:.4f} units")
+    lines.append(f"\nTop pick: BUY {best[0]} at ${best[1]:.4f}, could get {balance/best[1]:.4f} units")
     msg = "\n".join(lines)
     log.info("Crypto scan: top=%s mom=%.1f%%", best[0], best[2])
     _notify(msg)
