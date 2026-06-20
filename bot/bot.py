@@ -29,6 +29,9 @@ CRYPTO_WATCHLIST = [
     "ADA-USD", "AVAX-USD", "LINK-USD", "DOT-USD", "POL-USD",
 ]
 
+# Stocks that do not support fractional share trading on Robinhood
+WHOLE_SHARES_ONLY = {"SPCX"}
+
 def _notify(msg: str) -> None:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -55,8 +58,8 @@ def _log_trade(symbol: str, asset_type: str, side: str, quantity: float,
 
 
 def _suggest_crypto(balance: float) -> None:
-    """Scan crypto watchlist for momentum signals and send Telegram suggestions."""
-    suggestions = []
+    """Scan crypto watchlist for momentum and send top 3 to Telegram always."""
+    results = []
     for symbol in CRYPTO_WATCHLIST:
         try:
             hist = yf.Ticker(symbol).history(period="1mo", interval="1d")
@@ -66,22 +69,24 @@ def _suggest_crypto(balance: float) -> None:
             recent = prices[-1]
             past = prices[-6]
             momentum = (recent - past) / past * 100
-            if momentum > 3.0:
-                suggestions.append((symbol, recent, momentum))
+            results.append((symbol, recent, momentum))
         except Exception:
             continue
 
-    if not suggestions:
-        log.info("Crypto scan: no strong momentum signals")
+    if not results:
+        log.info("Crypto scan: no data available")
         return
 
-    suggestions.sort(key=lambda x: x[2], reverse=True)
-    lines = [f"🚀 Crypto suggestions (balance: ${balance:.2f}):"]
-    for symbol, price, mom in suggestions[:3]:
-        affordable = balance / price
-        lines.append(f"• {symbol}: ${price:.4f} (+{mom:.1f}% momentum) — could buy {affordable:.4f}")
+    results.sort(key=lambda x: x[2], reverse=True)
+    top = results[:3]
+    best = top[0]
+    lines = [f"Crypto update (balance: ${balance:.2f}):\n"]
+    for symbol, price, mom in top:
+        arrow = "+" if mom >= 0 else ""
+        lines.append(f"  {symbol}: ${price:.4f} ({arrow}{mom:.1f}% / 5d)")
+    lines.append(f"\nTop pick: BUY {best[0]} — ${best[1]:.4f}, could get {balance/best[1]:.4f} units")
     msg = "\n".join(lines)
-    log.info(msg)
+    log.info("Crypto scan: top=%s mom=%.1f%%", best[0], best[2])
     _notify(msg)
 
 
@@ -159,6 +164,11 @@ def run():
                     continue
 
                 quantity = round(trade_amount_usd / trade.price, 6) if trade.price > 0 else trade.quantity
+                if symbol in WHOLE_SHARES_ONLY:
+                    quantity = max(1, int(quantity))
+                    if quantity * trade.price > trade_amount_usd * 3:
+                        log.info("%s: skipping — 1 share ($%.2f) exceeds budget", symbol, trade.price)
+                        continue
                 log.info("%s [%s] price=%.4f signal=%s qty=%.4f ($%.2f) — %s",
                          symbol, asset_type, trade.price, trade.signal.value,
                          quantity, quantity * trade.price, trade.reason)
