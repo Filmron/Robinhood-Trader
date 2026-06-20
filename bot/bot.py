@@ -26,7 +26,7 @@ TRADE_LOG = Path("trades.csv")
 
 CRYPTO_WATCHLIST = [
     "BTC-USD", "ETH-USD", "XRP-USD", "SOL-USD", "DOGE-USD",
-    "ADA-USD", "AVAX-USD", "LINK-USD", "DOT-USD", "MATIC-USD",
+    "ADA-USD", "AVAX-USD", "LINK-USD", "DOT-USD", "POL-USD",
 ]
 
 def _notify(msg: str) -> None:
