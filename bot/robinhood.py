@@ -210,5 +210,9 @@ class RobinhoodClient:
         return self._parse_json(raw, "positions")
 
     def get_buying_power(self) -> float:
-        raw = self._call("What is my current buying power? Return only the number.")
-        return float(raw.strip())
+        raw = self._call("What is my current buying power? Return only the dollar amount as a plain number, no symbols or text.")
+        # Extract first number found in response
+        match = re.search(r"[\d,]+\.?\d*", raw.replace(",", ""))
+        if match:
+            return float(match.group().replace(",", ""))
+        raise ValueError(f"Could not parse buying power from: {raw!r}")
