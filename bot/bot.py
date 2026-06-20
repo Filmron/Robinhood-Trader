@@ -144,7 +144,7 @@ def run():
         # Suggest crypto every 6 cycles (~30 min at 5-min intervals)
         if cycle % 6 == 1:
             try:
-                balance = float(os.getenv("TRADE_AMOUNT_USD", "5")) * 5
+                balance = client.get_buying_power()
                 _suggest_crypto(balance)
             except Exception as exc:
                 log.warning("Crypto scan failed: %s", exc)
